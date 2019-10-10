@@ -1,194 +1,295 @@
-# Как работает конфигурация в .NET Core. Продолжение
+# Как работает конфигурация в .NET Core. Продолжение
 
-Отложим разговоры о производительности и методологиях и вернемся к разговору о конфигурации.
-В предыдущей статье мы поговорили о том, что такое конфигурация, как ее использовать, и как определять своих провайдеров конфигурации
+Отложим разговоры о производительности и методологиях и вернемся к разговору о конфигурации.
+В предыдущей статье мы поговорили о том, что такое конфигурация, как ее использовать, и как определять провайдеров конфигурации.
 
-В этой статье я хочу затронуть продвинутые сценарии использования, такие как отслеживание изменений, именованную конфигурацию и прочие. Добро пожаловать под кат.
+
+В этой статье я хочу затронуть продвинутые сценарии использования, такие как отслеживание изменений, именованные параметры конфигурации и другие возможности. Добро пожаловать под кат.
+
 
 <cut/>
 
+
 ## ```IOptions<T>```
 
-Мы уже познакомились с объектом интерфейса `IConfiguration` и знаем, что конфигурация хранится в виде словаря. 
-Как быть, если мы хотим получить параметр из конфигурации в нашем сервисе?
 
-Обычно, решение находится быстро:
+Мы уже знакомы с объектом интерфейса `IConfiguration` и знаем, что конфигурация хранится в виде словаря. 
+Как быть, если мы хотим получить параметр из конфигурации в нашем сервисе?
+
+
+Вот так выглядит решение на скорую руку:
+
 
 ```csharp
-public class SampleScopedService
+public class SampleScopedService
 {
-    private readonly IConfiguration _configuration;
-    public SampleScopedService(IConfiguration configuration)
-    {
-        _configuration = configuration;
-    }
+    private readonly IConfiguration _configuration;
+    public SampleScopedService(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
 
-	/* ... */
+
+    /* ... */
 }
 ```
 
-Что здесь не так?
-+ Зависимость от `IConfiguration`
-+ `SampleScopedService` должен знать как прочитать параметр из конфигурации (параметром может быть массив, число и т.д)
-+ Мы передаем в сервис весь словарь конфигурации, хотя как правило ему нужны только некоторые свойств.
++ Зависимость от `IConfiguration`
++ `SampleScopedService` должен знать как прочитать параметр из конфигурации (параметром может быть массив, число и т.д)
++ В сервис передается полный словарь конфигурации, хотя как правило используются только некоторые свойств.
 
-Что можно сделать?
 
-В .NET Core у нас есть возможность использовать строготипизированную объекты конфигурации, которые представлены объектом интерфейса `IOptions<T>`.
+Что можно сделать?
+
+
+В .NET Core у нас есть возможность использовать строготипизированные объекты конфигурации, которые представлены объектом интерфейса `IOptions<T>`.
 
 ```csharp
-public interface IOptions<out TOptions>
-  where TOptions : class, new()
+public interface IOptions<out TOptions>
+  where TOptions : class, new()
 {
-  	TOptions Value { get; }
+    TOptions Value { get; }
 }
 ```
 
-Свойство `Value` это класс, описывающий секцию настроек.
+Интерфейс содержит единственное свойство `Value` - класс, описывающий секцию настроек.
 
-Использую данный механизм мы можем изменить код следующим образом:
+Использую данный механизм можно изменить код следующим образом.
+
+Добавим объект в котором будут храниться настройки сервиса.
+
 
 ```csharp
-public class SampleOptions
+public class SampleOptions
 {
-    public string Name { get; set; }
+    public string Name { get; set; }
 
-    public int Count { get; set; }  
-}
 
-public class SampleScopedService
-{
-    private readonly IOptions<SampleOptions> _options;
-    public SampleScopedService(IOptions<SampleOptions> options)
-    {
-        _options = options;
-    }
-
-	/* ... */
+    public int Count { get; set; }  
 }
 ```
 
-Что изменилось?
-+ Зависимость от `IOptions`. Мы перестали зависеть от `IConfiguration`, но получили зависимость от `IOptions`. Я считаю, что это меньшим из двух зол.
 
-+ Так как конфигурация строготипизирована, `SampleScopedService` не нужно знать, как прочитать параметр из конфигурации. Вместо этого мы обращаемся к свойству класса.
+Зарегистрируем опции в `Startup`.
 
-+ Мы передаем только те параметры, от которых зависит наш сервис, тем самым соблюдая принцип разделения отвественности.
 
-Все новое, это хорошо ~~забытое~~ переписанное старое.
-Подобный функционал можно было использовать и в .Net Framework.
+```csharp
+public void ConfigureServices(IServiceCollection services)
+{
+     /*...*/
 
+    services.Configure<SampleOptions>("SampleOptionsInstance", 
+        Configuration.GetSection("SampleOptions"));
+    /*...*/
+}
+```
+
+
+Выбранная перегрузка метода `Configure<SampleOptions>` принимает название экземпляра опций и объект интерфейса `IConfigurationSection`.
+
+
+Первый аргумент необязателен и необходим нам в том случае, если мы хотим зарегистрировать несколько экземпляров `SampleOptions`, которые будут хранить в себе разные параметры конфигурации. Указание имени позволит запрашивать конкретный экземпляр объекта.
+
+
+Второй аргумент это секция конфигурации. Например, если мы читаем конфигурацию из json-файла, то `SampleOptions` будет выглядеть следующим образом:
+
+
+```json
+{
+
+
+  "SampleOptions": {
+    "Name": "I am appsettings",
+    "Count": 1
+  }
+}
+```
+
+Затем мы изменяем `SampleScopedService`, конструктор которого теперь принимает `IOptions<SampleOptions>`.
+
+
+```csharp
+public class SampleScopedService
+{
+    private readonly IOptions<SampleOptions> _options;
+    public SampleScopedService(IOptions<SampleOptions> options)
+    {
+        _options = options;
+    }
+
+    /* ... */
+}
+```
+
++ Мы перестали зависеть от `IConfiguration`, но получили зависимость от `IOptions`. Я считаю, что это меньшим из двух зол.
+
+
++ Так как конфигурация строготипизирована, `SampleScopedService` не нужно знать, как прочитать параметр из конфигурации. Вместо этого мы обращаемся к свойству класса.
+
+
++ Мы передаем только те параметры, от которых зависит наш сервис, тем самым соблюдая принцип разделения отвественности.
+
+
+Все новое, это хорошо ~~забытое~~ пересмотренное старое.
+Подобный функционал можно было использовать в .Net Framework.
+
+`IOptions<SampleOptions>` регистрируется как `Singleton`.
+<spoiler>
 ```xml
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 
 <configuration>
-   <configSections>
-       <section name="customSection"
-                type="CustomSection, Samples.CustomSection"/>
-   </configSections>
-   /* .... */
-   <customSection>
-       <settings name="Value" />
-   </customSection>
+   <configSections>
+       <section name="customSection"
+                type="CustomSection, Samples.CustomSection"/>
+   </configSections>
+   /* .... */
+   <customSection>
+       <settings name="Value" />
+   </customSection>
 </configuration>
 ```
-
-- Секция `customSection` содержит настройки приложения
-- Секция `settings` описывает набор параметров конфигурации
+В элементе `configSections` мы объявляем секцию в которой будут храниться параметры конфигурации (аттрибут `name`), а также указываем с каким типом она будет сопоставлена (аттрибут `type`).
 
 
+Затем объявляем секцию `customSection` и помещаем в нее элемент `settings`, который описывает набор параметров конфигурации
+
+Затем нам необходимо настроить чтение этого элемента в класс C#.
+
+```csharp
+public class CustomSection : ConfigurationSection
+{
+    [ConfigurationProperty("settings", IsRequired = true)]
+    public Settings Settings
+    {
+        get { return (Settings)this["settings"]; }
+        set { this["settings"] = value; }
+    }
+}
+
+
+public class Settings: ConfigurationElement
+{
+    [ConfigurationProperty("name", IsRequired = true)]
+    public string Name
+    {
+        get { return (string)this["name"]; }
+        set { this["name"] = value; }
+    }
+}
+```
+Для того, чтобы получить параметры в виде объекта, нам нужно создать наследников для `ConfigurationSection` и `ConfigurationElement`, и реализовать свойства, которые мы сопоставим с секциями xml-файла.
+
+
+После реализации, мы можем прочитать конфигурацию в объект следующим образом:
 
 
 ```csharp
-public class CustomSection : ConfigurationSection
-{
-    [ConfigurationProperty("settings", IsRequired = true)]
-    public Settings Settings
-    {
-        get { return (Settings)this["settings"]; }
-        set { this["settings"] = value; }
-    }
-}
+var section = (CustomSection)ConfigurationManager
+ .GetSection( "customSection" );
 
-public class Settings: ConfigurationElement
+
+if ( section != null )
 {
-    [ConfigurationProperty("name", IsRequired = true)]
-    public string Name
-    {
-        get { return (string)this["name"]; }
-        set { this["name"] = value; }
-    }
+   /* .... */
 }
 ```
-Для того, чтобы получить параметры в виде объекта C#, нам нужно создать наследников для `ConfigurationSection` и `ConfigurationElement`, и реализовать свойства, которые мы сопоставим с секциями xml-файла.
-
-После реализации, мы можем прочитать конфигурацию в объект следующим образом:
-
-```csharp
-var section = (CustomSection)ConfigurationManager
- .GetSection( "customSection" );
-
-if ( section != null )
-{
-   /* .... */
-}
-```
-
-
+</spoiler>
 
 ## ```IOptionsMonitor<T>```
 
-`IOptionsMonitor<T>` позволяет подписаться на изменении конфигурации.
-
 ```csharp
-public interface IOptionsMonitor<out TOptions>
+public interface IOptionsMonitor<out TOptions>
 {
-  	TOptions CurrentValue { get; }
+    TOptions CurrentValue { get; }
 
-  	TOptions Get(string name);
 
-  	IDisposable OnChange(Action<TOptions, string> listener);
+    TOptions Get(string name);
+
+
+    IDisposable OnChange(Action<TOptions, string> listener);
 }
 ```
-- `CurrentValue` содержит текущее значение
-- Метод `Get` позволяет получить экземпля опций, зарегистрированный под определенным именем ( подробнее в конце статьи)
-- `OnChange` позволяет подписаться на изменение источника конфигурации.
++ Свойство `CurrentValue` содержит текущее значение экземпляра опций
++ Метод `Get` позволяет получить именованный экземпляр опций
++ `OnChange` отвечает за подписку на изменение источника конфигурации
 
-Объект реализующий этот интерфейс регистрируется как singleton, что дает нам возможность использовать его в своих 
+`IOptionsMonitor<T>` стоит использовать в случаях, когда мы хотим реагировать на изменение источника конфигурации или использовать именованные опции.
+Использование данного сервиса, позволяет нам изменять конфигурацию во время работы приложения, без перезагрузки приложения.
 
-
-
-## ```IOptionsSnapshot<T>```
+Для регистрации, нам не нужно выполнять дополнительных действий, достаточно регистрации опций из примера выше.
 
 ```csharp
-public interface IOptionsSnapshot<out TOptions>
-  : IOptions<TOptions>
-     where TOptions : class, new()
+public void ConfigureServices(IServiceCollection services)
 {
-  	TOptions Get(string name);
+     /*...*/
+
+    services.Configure<SampleOptions>("SampleOptionsInstance", 
+        Configuration.GetSection("SampleOptions"));
+    /*...*/
 }
 ```
 
-## ```IConfigure<T>```
+Затем передаем `IOptionsMonitor<SettingsOptions>` в конструктор `SampleSingletonService`.
 
 ```csharp
-
-```
-
-## ```IPostConfigure<T>```
-
-```csharp
-public class OptionsConfigurator
-    : IPostConfigureOptions<NamedOptions>
+public class SampleSingletonService
 {
-    public void PostConfigure(string name, NamedOptions options)
+    public SampleSingletonService(
+        IOptionsMonitor<SettingsOptions> optionsMonitor)
     {
-        throw new System.NotImplementedException();
+        _optionsMonitor = optionsMonitor;
     }
+
+    /*...*/
 }
 ```
 
-## Валидация параметров конфигурации
+
+Объект реализующий этот интерфейс регистрируется как `Singleton`.
+
+
+
+
+## ```IOptionsSnapshot<T>```
+
+
+```csharp
+public interface IOptionsSnapshot<out TOptions>
+  : IOptions<TOptions>
+     where TOptions : class, new()
+{
+    TOptions Get(string name);
+}
+```
+
+
+## ```IConfigure<T>```
+
+
+```csharp
+
+
+```
+
+
+## ```IPostConfigure<T>```
+
+
+```csharp
+public class OptionsConfigurator
+    : IPostConfigureOptions<NamedOptions>
+{
+    public void PostConfigure(string name, NamedOptions options)
+    {
+        throw new System.NotImplementedException();
+    }
+}
+```
+
+
+## Валидация параметров конфигурации
+
 
 ```csharp
 ```
